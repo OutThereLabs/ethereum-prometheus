@@ -38,10 +38,10 @@ func main() {
 
 	var providerURL = os.Getenv("WEB3_PROVIDER_URL")
 	if providerURL == "" {
-		providerURL = "127.0.0.1:8545"
+		providerURL = "http://127.0.0.1:8545"
 	}
 	flag.StringVar(&providerURL, "providerURL", providerURL, "Web3 Provider URL")
-	client, clientErr := rpc.Dial("http://localhost:8545")
+	client, clientErr := rpc.Dial(providerURL)
 
 	if clientErr != nil {
 		fmt.Println("Error connecting: ", clientErr)
