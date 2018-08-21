@@ -33,6 +33,11 @@ var (
 		Help: "The starting block",
 	})
 
+	syncingRemainingBlocksGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "web3_eth_syncing_remaining_blocks",
+		Help: "Blocks remaining to sync",
+	})
+
 	syncingCurrentBlockGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "web3_eth_syncing_current_block",
 		Help: "The current synced block",
@@ -69,6 +74,7 @@ func init() {
 	prometheus.MustRegister(syncingStartingBlockGauge)
 	prometheus.MustRegister(syncingCurrentBlockGauge)
 	prometheus.MustRegister(syncingHighestBlockGauge)
+	prometheus.MustRegister(syncingRemainingBlocksGauge)
 
 	gasPriceGauge.Set(-1)
 	prometheus.MustRegister(gasPriceGauge)
@@ -113,7 +119,7 @@ func updateStats(t time.Time) {
 func updateBlockNumber() {
 	blockNumber, err := connection.Eth.GetBlockNumber()
 	if err == nil {
-		blockNumberGauge.Set(float64(blockNumber.ToUInt64()))
+		blockNumberGauge.Set(float64(blockNumber.Uint64()))
 	}
 }
 
@@ -131,29 +137,35 @@ func updateMining() {
 func updatePeerCount() {
 	peerCount, err := connection.Net.GetPeerCount()
 	if err == nil {
-		peerCountGauge.Set(float64(peerCount.ToUInt64()))
+		peerCountGauge.Set(float64(peerCount.Uint64()))
 	}
 }
 
 func updateSyncing() {
 	syncing, err := connection.Eth.IsSyncing()
 	if err == nil {
-		syncingStartingBlockGauge.Set(float64(syncing.StartingBlock.ToUInt64()))
-		syncingCurrentBlockGauge.Set(float64(syncing.CurrentBlock.ToUInt64()))
-		syncingHighestBlockGauge.Set(float64(syncing.HighestBlock.ToUInt64()))
+		startingBlock := syncing.StartingBlock.Uint64()
+		currentBlock := syncing.CurrentBlock.Uint64()
+		highestBlock := syncing.HighestBlock.Uint64()
+		remainingBlocks := highestBlock - currentBlock
+
+		syncingStartingBlockGauge.Set(float64(startingBlock))
+		syncingCurrentBlockGauge.Set(float64(currentBlock))
+		syncingHighestBlockGauge.Set(float64(highestBlock))
+		syncingRemainingBlocksGauge.Set(float64(remainingBlocks))
 	}
 }
 
 func updateHashrate() {
 	hashRate, err := connection.Eth.GetHashRate()
 	if err == nil {
-		hashRateGauge.Set(float64(hashRate.ToUInt64()))
+		hashRateGauge.Set(float64(hashRate.Uint64()))
 	}
 }
 
 func updateGasPrice() {
 	gasPrice, err := connection.Eth.GetGasPrice()
 	if err == nil {
-		gasPriceGauge.Set(float64(gasPrice.ToUInt64()))
+		gasPriceGauge.Set(float64(gasPrice.Uint64()))
 	}
 }
