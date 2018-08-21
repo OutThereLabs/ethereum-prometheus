@@ -1,101 +1,59 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
+
 	"github.com/prometheus/client_golang/prometheus"
-	web3 "github.com/regcostajr/go-web3"
-	"github.com/regcostajr/go-web3/providers"
 )
 
 var (
-	blockNumberGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_block_number",
-		Help: "The number of the most recent block",
-	})
-
-	miningGuage = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_mining",
-		Help: "Whether the node is mining or not",
-	})
-
 	peerCountGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "web3_net_peerCount",
 		Help: "The number of connected peers",
-	})
-
-	syncingStartingBlockGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_syncing_starting_block",
-		Help: "The starting block",
 	})
 
 	syncingRemainingBlocksGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "web3_eth_syncing_remaining_blocks",
 		Help: "Blocks remaining to sync",
 	})
-
-	syncingCurrentBlockGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_syncing_current_block",
-		Help: "The current synced block",
-	})
-
-	syncingHighestBlockGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_syncing_highest_block",
-		Help: "The highest known block",
-	})
-
-	hashRateGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_hash_rate",
-		Help: "The current hash rate",
-	})
-
-	gasPriceGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "web3_eth_gas_price",
-		Help: "The current gas price",
-	})
-
-	// pendingTransactionsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-	//     Name: "web3_eth_pending_transactions",
-	//     Help: "The number of pending transactions"
-	// })
-
-	connection = web3.NewWeb3(providers.NewHTTPProvider("127.0.0.1:8454", 10, false))
 )
 
 func init() {
-	prometheus.MustRegister(blockNumberGauge)
-	prometheus.MustRegister(miningGuage)
 	prometheus.MustRegister(peerCountGauge)
-	prometheus.MustRegister(hashRateGauge)
-	prometheus.MustRegister(syncingStartingBlockGauge)
-	prometheus.MustRegister(syncingCurrentBlockGauge)
-	prometheus.MustRegister(syncingHighestBlockGauge)
 	prometheus.MustRegister(syncingRemainingBlocksGauge)
-
-	gasPriceGauge.Set(-1)
-	prometheus.MustRegister(gasPriceGauge)
 }
 
 func main() {
 	fmt.Println("Starting")
 
+	var providerURL = os.Getenv("WEB3_PROVIDER_URL")
+	if providerURL == "" {
+		providerURL = "127.0.0.1:8545"
+	}
+	flag.StringVar(&providerURL, "providerURL", providerURL, "Web3 Provider URL")
+	client, clientErr := rpc.Dial("http://localhost:8545")
+
+	if clientErr != nil {
+		fmt.Println("Error connecting: ", clientErr)
+		return
+	}
+
 	ticker := time.NewTicker(time.Second * 5)
 	go func() {
 		for t := range ticker.C {
-			updateStats(t)
+			updateStats(t, client)
 		}
 	}()
-
-	var providerURL = os.Getenv("WEB3_PROVIDER_URL")
-	if providerURL == "" {
-		providerURL = "127.0.0.1:8454"
-	}
-	flag.StringVar(&providerURL, "providerURL", providerURL, "Web3 Provider URL")
-	connection = web3.NewWeb3(providers.NewHTTPProvider(providerURL, 10, false))
 
 	var port = os.Getenv("METRICS_PORT")
 	if port == "" {
@@ -105,67 +63,46 @@ func main() {
 
 	http.Handle("/metrics", prometheus.Handler())
 	http.ListenAndServe(":"+port, nil)
+
+	client.Close()
 }
 
-func updateStats(t time.Time) {
-	updateBlockNumber()
-	updatePeerCount()
-	updateMining()
-	updateSyncing()
-	updateHashrate()
-	updateGasPrice()
+func updateStats(t time.Time, client *rpc.Client) {
+	updateSyncing(client)
+	updatePeers(client)
 }
 
-func updateBlockNumber() {
-	blockNumber, err := connection.Eth.GetBlockNumber()
-	if err == nil {
-		blockNumberGauge.Set(float64(blockNumber.Uint64()))
+func updateSyncing(client *rpc.Client) {
+	ec := ethclient.NewClient(client)
+	syncing, err := ec.SyncProgress(context.Background())
+	if err != nil {
+		syncingRemainingBlocksGauge.Set(-1)
+		return
 	}
+
+	if syncing == nil {
+		syncingRemainingBlocksGauge.Set(0)
+		return
+	}
+
+	remainingBlocks := syncing.HighestBlock - syncing.CurrentBlock
+
+	syncingRemainingBlocksGauge.Set(float64(remainingBlocks))
 }
 
-func updateMining() {
-	mining, err := connection.Eth.IsMining()
-	if err == nil {
-		if mining {
-			miningGuage.Set(1)
-		} else {
-			miningGuage.Set(0)
-		}
+func updatePeers(client *rpc.Client) {
+	ctx := context.Background()
+	var raw json.RawMessage
+	if err := client.CallContext(ctx, &raw, "net_peerCount"); err != nil {
+		peerCountGauge.Set(-1)
+		return
 	}
-}
 
-func updatePeerCount() {
-	peerCount, err := connection.Net.GetPeerCount()
-	if err == nil {
-		peerCountGauge.Set(float64(peerCount.Uint64()))
+	var peerCount hexutil.Uint64
+	if err := json.Unmarshal(raw, &peerCount); err != nil {
+		peerCountGauge.Set(-1)
+		return
 	}
-}
 
-func updateSyncing() {
-	syncing, err := connection.Eth.IsSyncing()
-	if err == nil {
-		startingBlock := syncing.StartingBlock.Uint64()
-		currentBlock := syncing.CurrentBlock.Uint64()
-		highestBlock := syncing.HighestBlock.Uint64()
-		remainingBlocks := highestBlock - currentBlock
-
-		syncingStartingBlockGauge.Set(float64(startingBlock))
-		syncingCurrentBlockGauge.Set(float64(currentBlock))
-		syncingHighestBlockGauge.Set(float64(highestBlock))
-		syncingRemainingBlocksGauge.Set(float64(remainingBlocks))
-	}
-}
-
-func updateHashrate() {
-	hashRate, err := connection.Eth.GetHashRate()
-	if err == nil {
-		hashRateGauge.Set(float64(hashRate.Uint64()))
-	}
-}
-
-func updateGasPrice() {
-	gasPrice, err := connection.Eth.GetGasPrice()
-	if err == nil {
-		gasPriceGauge.Set(float64(gasPrice.Uint64()))
-	}
+	peerCountGauge.Set(float64(peerCount))
 }
