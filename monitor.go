@@ -74,7 +74,7 @@ func main() {
 	http.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
 		remainingBlocks := remainingBlocks(client)
 
-		if remainingBlocks > 10 {
+		if remainingBlocks > maxRemainingBlocks {
 			w.WriteHeader(500)
 			w.Write([]byte("error: syncing"))
 		} else {
