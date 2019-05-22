@@ -28,11 +28,27 @@ var (
 	})
 
 	maxRemainingBlocks uint64 = 10
+
+	blockGapGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "web3_block_gap",
+		Help: "Block gap, the remaining warp sync blocks",
+	})
 )
 
 func init() {
 	prometheus.MustRegister(peerCountGauge)
 	prometheus.MustRegister(syncingRemainingBlocksGauge)
+	prometheus.MustRegister(blockGapGauge)
+}
+
+func shouldEnableParity() bool {
+	var enableParityString = os.Getenv("ENABLE_PARITY")
+	var enableParity = false
+	if enableParityString == "true" {
+		enableParity = true
+	}
+	flag.BoolVar(&enableParity, "enableParity", enableParity, "Enable parity")
+	return enableParity
 }
 
 func main() {
@@ -50,10 +66,12 @@ func main() {
 		return
 	}
 
+	enableParity := shouldEnableParity()
+
 	ticker := time.NewTicker(time.Second * 5)
 	go func() {
 		for t := range ticker.C {
-			updateStats(t, client)
+			updateStats(t, client, enableParity)
 		}
 	}()
 
@@ -73,8 +91,9 @@ func main() {
 
 	http.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
 		remainingBlocks := remainingBlocks(client)
+		chainStatus := getChainStatus(client)
 
-		if remainingBlocks > maxRemainingBlocks {
+		if remainingBlocks > maxRemainingBlocks || chainStatus.BlockGap > 0 {
 			w.WriteHeader(500)
 			w.Write([]byte("error: syncing"))
 		} else {
@@ -88,9 +107,43 @@ func main() {
 	client.Close()
 }
 
-func updateStats(t time.Time, client *rpc.Client) {
+func updateStats(t time.Time, client *rpc.Client, enableParity bool) {
+	if enableParity {
+		updateChainStatus(client)
+	}
+
 	updateSyncing(client)
 	updatePeers(client)
+}
+
+type chainStatus struct {
+	BlockGap int64 `json:"blockGap,omitempty"`
+}
+
+func getChainStatus(client *rpc.Client) *chainStatus {
+	ctx := context.Background()
+
+	var raw json.RawMessage
+	if err := client.CallContext(ctx, &raw, "parity_chainStatus"); err != nil {
+		return &chainStatus{
+			BlockGap: -1,
+		}
+	}
+
+	var result *chainStatus
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return &chainStatus{
+			BlockGap: -1,
+		}
+	}
+
+	return result
+}
+
+func updateChainStatus(client *rpc.Client) {
+	chainStatus := getChainStatus(client)
+
+	blockGapGauge.Set(float64(chainStatus.BlockGap))
 }
 
 func remainingBlocks(client *rpc.Client) uint64 {
