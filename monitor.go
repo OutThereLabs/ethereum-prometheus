@@ -91,9 +91,23 @@ func main() {
 
 	http.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
 		remainingBlocks := remainingBlocks(client)
-		chainStatus := getChainStatus(client)
 
-		if remainingBlocks > maxRemainingBlocks || chainStatus.BlockGap > 0 {
+		var blockGap uint64
+
+		if enableParity {
+			chainStatus, err := getChainStatus(client)
+			if err == nil {
+				if len(chainStatus.BlockGap) == 2 {
+					blockGap = uint64(chainStatus.BlockGap[1] - chainStatus.BlockGap[0])
+				} else {
+					blockGap = 0
+				}
+			} else {
+				fmt.Println("Error getting chain status: ", err)
+			}
+		}
+
+		if remainingBlocks > maxRemainingBlocks || blockGap > 0 {
 			w.WriteHeader(500)
 			w.Write([]byte("error: syncing"))
 		} else {
@@ -117,33 +131,38 @@ func updateStats(t time.Time, client *rpc.Client, enableParity bool) {
 }
 
 type chainStatus struct {
-	BlockGap int64 `json:"blockGap,omitempty"`
+	BlockGap []hexutil.Uint64 `json:"blockGap,omitempty"`
 }
 
-func getChainStatus(client *rpc.Client) *chainStatus {
+func getChainStatus(client *rpc.Client) (*chainStatus, error) {
 	ctx := context.Background()
 
 	var raw json.RawMessage
 	if err := client.CallContext(ctx, &raw, "parity_chainStatus"); err != nil {
-		return &chainStatus{
-			BlockGap: -1,
-		}
+		return nil, err
 	}
 
 	var result *chainStatus
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return &chainStatus{
-			BlockGap: -1,
+		if err != nil {
+			fmt.Println("Could not decode ")
 		}
+		return nil, err
 	}
 
-	return result
+	return result, nil
 }
 
 func updateChainStatus(client *rpc.Client) {
-	chainStatus := getChainStatus(client)
+	chainStatus, err := getChainStatus(client)
 
-	blockGapGauge.Set(float64(chainStatus.BlockGap))
+	if err == nil {
+		if len(chainStatus.BlockGap) == 2 {
+			blockGapGauge.Set(float64(chainStatus.BlockGap[1] - chainStatus.BlockGap[0]))
+		} else {
+			blockGapGauge.Set(0)
+		}
+	}
 }
 
 func remainingBlocks(client *rpc.Client) uint64 {
