@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -83,7 +84,7 @@ func main() {
 
 	flag.Uint64Var(&maxRemainingBlocks, "max_remaining_blocks", 10, "Maximum remaining blocks to allow for readiness check")
 
-	http.Handle("/metrics", prometheus.Handler())
+	http.Handle("/metrics", promhttp.Handler())
 
 	http.HandleFunc("/health/alive", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "OK")
