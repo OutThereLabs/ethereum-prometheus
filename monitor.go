@@ -91,7 +91,12 @@ func main() {
 	})
 
 	http.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
-		remainingBlocks := remainingBlocks(client)
+		remainingBlocks, err := remainingBlocks(client)
+		if err != nil {
+			w.WriteHeader(500)
+			w.Write([]byte("error: syncing"))
+			return
+		}
 
 		var blockGap uint64
 
@@ -166,26 +171,26 @@ func updateChainStatus(client *rpc.Client) {
 	}
 }
 
-func remainingBlocks(client *rpc.Client) uint64 {
+func remainingBlocks(client *rpc.Client) (uint64, error) {
 	ec := ethclient.NewClient(client)
 	syncing, err := ec.SyncProgress(context.Background())
 	if err != nil {
 		syncingRemainingBlocksGauge.Set(-1)
-		return 0
+		return 0, err
 	}
 
 	if syncing == nil {
 		syncingRemainingBlocksGauge.Set(0)
-		return 0
+		return 0, nil
 	}
 
 	remainingBlocks := syncing.HighestBlock - syncing.CurrentBlock
 
-	return remainingBlocks
+	return remainingBlocks, nil
 }
 
 func updateSyncing(client *rpc.Client) {
-	remainingBlocks := remainingBlocks(client)
+	remainingBlocks, _ := remainingBlocks(client)
 
 	syncingRemainingBlocksGauge.Set(float64(remainingBlocks))
 }
